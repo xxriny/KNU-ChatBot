@@ -6,6 +6,10 @@ on:
       - server
   workflow_dispatch:
 
+concurrency:
+  group: "deploy-to-azure"
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
