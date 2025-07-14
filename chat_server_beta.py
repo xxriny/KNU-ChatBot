@@ -4,6 +4,9 @@ import os
 from datetime import datetime
 
 app = Flask(__name__)
+@app.route('/')
+def hello():
+    return '안녕'
 
 # CSV 및 이미지 폴더 설정
 CSV_PATH = '../../data/icee_categorized_sample.csv'
