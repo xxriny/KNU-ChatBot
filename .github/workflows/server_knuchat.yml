@@ -35,10 +35,6 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           zip -r release.zip . -x "venv/*" ".git/*" "*__pycache__*" ".DS_Store" ".github/*"
-      
-      - name: List contents of release.zip
-        run: unzip -l release.zip
-
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
