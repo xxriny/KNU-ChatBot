@@ -32,8 +32,11 @@ jobs:
 
       - name: Zip artifact for deployment
         run: |
-          cd $GITHUB_WORKSPACE
-          zip -r release.zip . -x "venv/*" ".git/*"
+          mkdir deploy_folder
+          cp app.py requirements.txt deploy_folder/
+          cp -r static templates deploy_folder/  # 필요한 폴더 추가
+          cd deploy_folder
+          zip -r ../release.zip .
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
