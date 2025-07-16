@@ -32,11 +32,7 @@ jobs:
 
       - name: Zip artifact for deployment
         run: |
-          mkdir deploy_folder
-          cp app.py requirements.txt deploy_folder/
-          cp -r static templates deploy_folder/  # 필요한 폴더 추가
-          cd deploy_folder
-          zip -r ../release.zip .
+          zip -r release.zip . -x "venv/*" ".git/*" "**/__pycache__/*"
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
