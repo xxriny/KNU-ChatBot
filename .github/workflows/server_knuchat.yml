@@ -1,4 +1,4 @@
-name: Build and deploy Python app to Azure Web App - knuchat
+name: Build and deploy Python app to Azure Web App - kchatbot
 
 on:
   push:
@@ -6,15 +6,11 @@ on:
       - server
   workflow_dispatch:
 
-concurrency:
-  group: "deploy-to-azure"
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: read #This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
@@ -24,22 +20,26 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Create and start virtual environment
         run: |
           python -m venv venv
           source venv/bin/activate
-          pip install -r requirements.txt
+          
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
-      
       - name: Zip artifact for deployment
-        run: |
-          cd ${{ github.workspace }}
-          zip -r release.zip . -x "venv/*" ".git/*" "*__pycache__*" ".DS_Store" ".github/*"
+        run: zip -r release.zip . -x "venv/*"
+
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: release.zip
+          path: |
+            release.zip
+            !venv/
 
   deploy:
     runs-on: ubuntu-latest
@@ -60,8 +60,8 @@ jobs:
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
         with:
           app-name: 'knuchat'
           publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: release.zip
           clean: true
