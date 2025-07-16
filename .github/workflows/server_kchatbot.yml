@@ -23,9 +23,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Zip entire repo for deployment (excluding venv and .git)
+      - name: Zip entire repo for deployment
         run: |
-          zip -r release.zip . -x "venv/*" ".git/*" "**/__pycache__/*"
+          zip -r release.zip . -x ".git/*"
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
