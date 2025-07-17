@@ -20,6 +20,7 @@ AZURE_BASE_URL = 'https://kchatbot.azurewebsites.net'
 
 df = pd.read_csv(CSV_PATH)
 
+
 def parse_deadline(deadline_str):
     try:
         if '~' in deadline_str:
