@@ -80,7 +80,7 @@ def message():
 
     matches = df[
         df['정규토픽'].str.contains(topic_norm, na=False) &
-        df['정규과'].str.contains(department_norm, na=False) &
+        df['정규과'].apply(lambda x: department_norm in x) &
         df['deadline'].notna() & (df['deadline'] >= today)
     ]
 
