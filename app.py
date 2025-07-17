@@ -2,6 +2,9 @@ from flask import Flask, request, jsonify, send_from_directory
 import pandas as pd
 import os
 from datetime import datetime
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
@@ -16,6 +19,21 @@ IMAGE_FOLDER = os.path.join(BASE_DIR, 'data/images')
 AZURE_BASE_URL = 'https://kchatbot.azurewebsites.net'
 
 df = pd.read_csv(CSV_PATH)
+
+def parse_deadline(deadline_str):
+    try:
+        if '~' in deadline_str:
+            start = deadline_str.split('~')[0].strip()
+            start = start.replace('.', '-').replace(' ', '')
+            return pd.to_datetime(start, errors='coerce')
+        elif '해당 없음' in deadline_str or '한 달' in deadline_str:
+            return pd.NaT
+        else:
+            return pd.to_datetime(deadline_str, errors='coerce')
+    except:
+        return pd.NaT
+
+df['deadline'] = df['deadline'].fillna('').apply(parse_deadline)
 
 @app.route('/images/<path:filename>')
 def serve_image(filename):
@@ -62,7 +80,6 @@ def message():
         })
 
     today = pd.to_datetime(datetime.today().date())
-    df['deadline'] = pd.to_datetime(df['deadline'], errors='coerce')
 
     topic = topic.replace(' ', '').lower()
     department = department.replace(' ', '').lower()
@@ -104,7 +121,7 @@ def message():
         deadline = row['deadline'].strftime('%Y-%m-%d') if pd.notna(row['deadline']) else '정보 없음'
         description = f"마감일: {deadline}\n요약: {one_line}"
 
-        link = row['link']
+        link = row['detail_link']
         raw_path = row['image']
         image_url = f"{AZURE_BASE_URL}/images/{os.path.basename(raw_path)}" if pd.notna(raw_path) and raw_path else None
 
