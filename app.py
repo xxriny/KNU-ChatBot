@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime
 import logging
+from difflib import get_close_matches
 
 logging.basicConfig(level=logging.INFO)
 
@@ -11,7 +12,6 @@ app = Flask(__name__)
 @app.route('/')
 def hello():
     return '안녕'
-
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, 'data/llm_classified_results.csv')
@@ -34,6 +34,13 @@ def parse_deadline(deadline_str):
         return pd.NaT
 
 df['deadline'] = df['deadline'].fillna('').apply(parse_deadline)
+df['정규과'] = df['department'].fillna('').str.replace(' ', '').str.lower()
+df['정규토픽'] = df['topic'].fillna('').str.replace(' ', '').str.lower()
+
+def normalize_to_closest(value, choices):
+    value = value.replace(' ', '').lower()
+    matches = get_close_matches(value, choices, n=1, cutoff=0.6)
+    return matches[0] if matches else value
 
 @app.route('/images/<path:filename>')
 def serve_image(filename):
@@ -48,8 +55,8 @@ def message():
         parts = [s.strip() for s in utterance.split(',')]
         if len(parts) < 2:
             raise ValueError
-        topic = parts[0]
-        department = parts[1]
+        topic_input = parts[0]
+        department_input = parts[1]
         sort_option = parts[2] if len(parts) >= 3 else '마감순'
     except ValueError:
         return jsonify({
@@ -65,31 +72,14 @@ def message():
             }
         })
 
-    if 'department' not in df.columns or 'topic' not in df.columns or 'deadline' not in df.columns:
-        return jsonify({
-            "version": "2.0",
-            "template": {
-                "outputs": [
-                    {
-                        "simpleText": {
-                            "text": "'department', 'topic', 'deadline' 열이 CSV에 존재하는지 확인해주세요."
-                        }
-                    }
-                ]
-            }
-        })
-
     today = pd.to_datetime(datetime.today().date())
 
-    topic = topic.replace(' ', '').lower()
-    department = department.replace(' ', '').lower()
-
-    df['정규과'] = df['department'].fillna('').str.replace(' ', '').str.lower()
-    df['정규토픽'] = df['topic'].fillna('').str.replace(' ', '').str.lower()
+    topic_norm = normalize_to_closest(topic_input, df['정규토픽'].unique())
+    department_norm = normalize_to_closest(department_input, df['정규과'].unique())
 
     matches = df[
-        df['정규토픽'].str.contains(topic, na=False) &
-        df['정규과'].str.contains(department, na=False) &
+        df['정규토픽'].str.contains(topic_norm, na=False) &
+        df['정규과'].str.contains(department_norm, na=False) &
         df['deadline'].notna() & (df['deadline'] >= today)
     ]
 
@@ -107,7 +97,7 @@ def message():
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": f"'{topic}, {department}' 관련 마감 기한이 지난 정보이거나 검색 결과가 없습니다."
+                            "text": f"'{topic_input}, {department_input}' 관련 마감 기한이 지난 정보이거나 검색 결과가 없습니다."
                         }
                     }
                 ]
@@ -122,7 +112,7 @@ def message():
         description = f"마감일: {deadline}\n요약: {one_line}"
 
         link = row['detail_link']
-        raw_path = row['image']
+        raw_path = row.get('image', '')
         image_url = f"{AZURE_BASE_URL}/images/{os.path.basename(raw_path)}" if pd.notna(raw_path) and raw_path else None
 
         card = {
