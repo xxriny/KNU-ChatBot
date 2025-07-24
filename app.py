@@ -2,46 +2,34 @@ from flask import Flask, request, jsonify, send_from_directory
 import pandas as pd
 import os
 from datetime import datetime
-import logging
-from difflib import get_close_matches
-
-logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-@app.route('/')
-def hello():
-    return '안녕'
+# CSV 및 이미지 폴더 설정
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, 'data/llm_classified_results.csv')
-IMAGE_FOLDER = os.path.join(BASE_DIR, 'data/images')
+IMAGE_FOLDER = '/home/data/images'
 AZURE_BASE_URL = 'https://kchatbot.azurewebsites.net'
 
+
+# CSV 불러오기
 df = pd.read_csv(CSV_PATH)
 
+# deadline 파싱 함수
+def parse_deadline(value):
+    if pd.isna(value):
+        return None
+    s = str(value).strip()
+    if '해당' in s or '한 달' in s:
+        return None
+    if '~' in s:
+        s = s.split('~')[-1].strip()  # 종료일 기준
+    s = s.replace('.', '-').replace(' ', '')
+    return pd.to_datetime(s, errors='coerce')
 
-def parse_deadline(deadline_str):
-    try:
-        if '~' in deadline_str:
-            start = deadline_str.split('~')[0].strip()
-            start = start.replace('.', '-').replace(' ', '')
-            return pd.to_datetime(start, errors='coerce')
-        elif '해당 없음' in deadline_str or '한 달' in deadline_str:
-            return pd.NaT
-        else:
-            return pd.to_datetime(deadline_str, errors='coerce')
-    except:
-        return pd.NaT
-
-df['deadline'] = df['deadline'].fillna('').apply(parse_deadline)
-df['정규과'] = df['department'].fillna('').str.replace(' ', '').str.lower()
-df['정규토픽'] = df['topic'].fillna('').str.replace(' ', '').str.lower()
-
-def normalize_to_closest(value, choices):
-    value = value.replace(' ', '').lower()
-    matches = get_close_matches(value, choices, n=1, cutoff=0.6)
-    return matches[0] if matches else value
+# 날짜 파싱
+df['deadline'] = df['deadline'].apply(parse_deadline)
 
 @app.route('/images/<path:filename>')
 def serve_image(filename):
@@ -50,23 +38,48 @@ def serve_image(filename):
 @app.route('/message', methods=['POST'])
 def message():
     data = request.get_json()
-    utterance = data.get('action', {}).get('params', {}).get('utterance', '').strip()
+    print("DEBUG DATA:", data)
 
-    try:
+    # 1. skillData 우선 처리
+    skill_data = data.get('skillData', {})
+    topic = skill_data.get('topic')
+    department = skill_data.get('department')
+    sort_option = skill_data.get('sort')
+
+    # 2. utterance 처리
+    if not topic or not department:
+        utterance = (
+            data.get('userRequest', {}).get('utterance')
+            or data.get('action', {}).get('params', {}).get('utterance', '')
+        ).strip()
+
         parts = [s.strip() for s in utterance.split(',')]
         if len(parts) < 2:
-            raise ValueError
-        topic_input = parts[0]
-        department_input = parts[1]
+            return jsonify({
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {
+                            "simpleText": {
+                                "text": "입력 형식은 '주제, 학과, 정렬옵션'처럼 콤마로 구분해주세요.\n예: 공모전, 컴퓨터공학과, 마감순"
+                            }
+                        }
+                    ]
+                }
+            })
+        topic = parts[0]
+        department = parts[1]
         sort_option = parts[2] if len(parts) >= 3 else '마감순'
-    except ValueError:
+
+    # CSV 컬럼 체크
+    if 'department' not in df.columns or 'topic' not in df.columns or 'deadline' not in df.columns:
         return jsonify({
             "version": "2.0",
             "template": {
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": "입력 형식은 '주제, 학과[, 정렬옵션]'처럼 콤마로 구분해주세요.\n예: 공모전, 컴퓨터공학과, 마감순"
+                            "text": "'department', 'topic', 'deadline' 열이 CSV에 존재하는지 확인해주세요."
                         }
                     }
                 ]
@@ -75,21 +88,27 @@ def message():
 
     today = pd.to_datetime(datetime.today().date())
 
-    topic_norm = normalize_to_closest(topic_input, df['정규토픽'].unique())
-    department_norm = normalize_to_closest(department_input, df['정규과'].unique())
+    # 정규화
+    topic = topic.replace(' ', '').lower()
+    department = department.replace(' ', '').lower()
 
+    df['정규과'] = df['department'].fillna('').str.replace(' ', '').str.lower()
+    df['정규토픽'] = df['topic'].fillna('').str.replace(' ', '').str.lower()
+
+    # 매칭
     matches = df[
-        df['정규토픽'].str.contains(topic_norm, na=False) &
-        df['정규과'].apply(lambda x: department_norm in x) &
-        df['deadline'].notna() & (df['deadline'] >= today)
+        df['정규토픽'].str.contains(topic, na=False) &
+        df['정규과'].str.contains(department.replace('과', '')[:2], na=False) &
+        (df['deadline'].isna() | (df['deadline'] >= today))
     ]
 
+    # 정렬
     if sort_option == '마감순':
-        matches = matches.sort_values(by='deadline', ascending=True)
+        matches = matches.sort_values(by='deadline', ascending=True, na_position='last')
     elif sort_option == '최신순':
-        matches = matches.sort_values(by='deadline', ascending=False)
+        matches = matches.sort_values(by='deadline', ascending=False, na_position='last')
     elif sort_option == '오래된순':
-        matches = matches.sort_values(by='deadline', ascending=True)
+        matches = matches.sort_values(by='deadline', ascending=True, na_position='last')
 
     if matches.empty:
         return jsonify({
@@ -98,14 +117,16 @@ def message():
                 "outputs": [
                     {
                         "simpleText": {
-                            "text": f"'{topic_input}, {department_input}' 관련 마감 기한이 지난 정보이거나 검색 결과가 없습니다."
+                            "text": f"'{topic}, {department}' 관련 마감 기한이 지난 정보이거나 검색 결과가 없습니다."
                         }
                     }
                 ]
             }
         })
 
+    # 카드 생성
     cards = []
+    default_image = f"{AZURE_BASE_URL}/images/default.png" 
     for _, row in matches.head(3).iterrows():
         title = row['title']
         one_line = row['one_line'] if pd.notna(row['one_line']) else '요약 없음'
@@ -113,9 +134,12 @@ def message():
         description = f"마감일: {deadline}\n요약: {one_line}"
 
         link = row['detail_link']
-        raw_path = row.get('image', '')
-        image_url = f"{AZURE_BASE_URL}/images/{os.path.basename(raw_path)}" if pd.notna(raw_path) and raw_path else None
-
+        raw_path = row['imageUrl']
+   
+        if pd.notna(raw_path) and raw_path:
+            image_url = f"{AZURE_BASE_URL}/images/{os.path.basename(raw_path)}"
+        else:
+            image_url = default_image
         card = {
             "title": title,
             "description": description,
@@ -143,3 +167,5 @@ def message():
             ]
         }
     })
+
+
