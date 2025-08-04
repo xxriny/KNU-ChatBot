@@ -1,52 +1,44 @@
-from flask import Flask, request, jsonify, send_from_directory
-import pandas as pd
+from flask import Flask, request, jsonify
+import pyodbc
 import os
 from datetime import datetime
+import logging
+from urllib.parse import quote
+from dotenv import load_dotenv
+
+load_dotenv() 
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-# CSV 및 이미지 폴더 설정
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(BASE_DIR, 'data/llm_classified_results.csv')
-IMAGE_FOLDER = '/home/data/images'
 AZURE_BASE_URL = 'https://kchatbot.azurewebsites.net'
+DEFAULT_IMAGE = f"{AZURE_BASE_URL}/images/default.png"
+DB_SERVER=os.getenv("DB_SERVER")
 
+conn = pyodbc.connect(
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+    f"SERVER={os.getenv('DB_SERVER')};"
+    f"DATABASE={os.getenv('DB_NAME')};"
+    f"UID={os.getenv('DB_USER')};"
+    f"PWD={os.getenv('DB_PASSWORD')};"
+)
 
-# CSV 불러오기
-df = pd.read_csv(CSV_PATH)
+cursor = conn.cursor()
 
-# deadline 파싱 함수
-def parse_deadline(value):
-    if pd.isna(value):
-        return None
-    s = str(value).strip()
-    if '해당' in s or '한 달' in s:
-        return None
-    if '~' in s:
-        s = s.split('~')[-1].strip()  # 종료일 기준
-    s = s.replace('.', '-').replace(' ', '')
-    return pd.to_datetime(s, errors='coerce')
-
-# 날짜 파싱
-df['deadline'] = df['deadline'].apply(parse_deadline)
-
-@app.route('/images/<path:filename>')
-def serve_image(filename):
-    return send_from_directory(IMAGE_FOLDER, filename)
+@app.route('/')
+def hello():
+    return '안녕'
 
 @app.route('/message', methods=['POST'])
 def message():
     data = request.get_json()
     print("DEBUG DATA:", data)
 
-    # 1. skillData 우선 처리
     skill_data = data.get('skillData', {})
     topic = skill_data.get('topic')
     department = skill_data.get('department')
     sort_option = skill_data.get('sort')
 
-    # 2. utterance 처리
     if not topic or not department:
         utterance = (
             data.get('userRequest', {}).get('utterance')
@@ -55,100 +47,66 @@ def message():
 
         parts = [s.strip() for s in utterance.split(',')]
         if len(parts) < 2:
-            return jsonify({
-                "version": "2.0",
-                "template": {
-                    "outputs": [
-                        {
-                            "simpleText": {
-                                "text": "입력 형식은 '주제, 학과, 정렬옵션'처럼 콤마로 구분해주세요.\n예: 공모전, 컴퓨터공학과, 마감순"
-                            }
-                        }
-                    ]
-                }
-            })
+            return make_text_response("방금 하신 말씀을  잘 이해하지 못했어요. \n저는 '주제, 학과' 형식으로 알려주셔야 가장 정확하게 찾아드릴 수 있어요!")
+
         topic = parts[0]
         department = parts[1]
         sort_option = parts[2] if len(parts) >= 3 else '마감순'
 
-    # CSV 컬럼 체크
-    if 'department' not in df.columns or 'topic' not in df.columns or 'deadline' not in df.columns:
-        return jsonify({
-            "version": "2.0",
-            "template": {
-                "outputs": [
-                    {
-                        "simpleText": {
-                            "text": "'department', 'topic', 'deadline' 열이 CSV에 존재하는지 확인해주세요."
-                        }
-                    }
-                ]
-            }
-        })
-
-    today = pd.to_datetime(datetime.today().date())
-
-    # 정규화
+    today = datetime.today().date()
     topic = topic.replace(' ', '').lower()
     department = department.replace(' ', '').lower()
 
-    df['정규과'] = df['department'].fillna('').str.replace(' ', '').str.lower()
-    df['정규토픽'] = df['topic'].fillna('').str.replace(' ', '').str.lower()
+    query = """
+        SELECT DISTINCT n.id, n.title, n.deadline, n.oneline, n.topic, n.created_at, n.url
+        FROM dbo.notice n
+        JOIN dbo.notice_department d ON n.id = d.notice_id
+        WHERE REPLACE(LOWER(d.department), ' ', '') LIKE ?
+        AND REPLACE(LOWER(n.topic), ' ', '') LIKE ?
+        AND (n.deadline IS NULL OR n.deadline >= ?)
+    """
 
-    # 매칭
-    matches = df[
-        df['정규토픽'].str.contains(topic, na=False) &
-        df['정규과'].str.contains(department.replace('과', '')[:2], na=False) &
-        (df['deadline'].isna() | (df['deadline'] >= today))
-    ]
-
-    # 정렬
     if sort_option == '마감순':
-        matches = matches.sort_values(by='deadline', ascending=True, na_position='last')
+        query += " ORDER BY n.deadline ASC"
     elif sort_option == '최신순':
-        matches = matches.sort_values(by='deadline', ascending=False, na_position='last')
+        query += " ORDER BY n.created_at DESC"
     elif sort_option == '오래된순':
-        matches = matches.sort_values(by='deadline', ascending=True, na_position='last')
+        query += " ORDER BY n.created_at ASC"
 
-    if matches.empty:
-        return jsonify({
-            "version": "2.0",
-            "template": {
-                "outputs": [
-                    {
-                        "simpleText": {
-                            "text": f"'{topic}, {department}' 관련 마감 기한이 지난 정보이거나 검색 결과가 없습니다."
-                        }
-                    }
-                ]
-            }
-        })
+    cursor.execute(query, f"%{department[:2]}%", f"%{topic}%", today)
+    rows = cursor.fetchall()
 
-    # 카드 생성
+    if not rows:
+        return make_text_response(f"'{topic}, {department}' 관련 마감 기한이 지난 정보이거나 공지사항이 존재하지 않아요.")
+
     cards = []
-    default_image = f"{AZURE_BASE_URL}/images/default.png" 
-    for _, row in matches.head(3).iterrows():
-        title = row['title']
-        one_line = row['one_line'] if pd.notna(row['one_line']) else '요약 없음'
-        deadline = row['deadline'].strftime('%Y-%m-%d') if pd.notna(row['deadline']) else '정보 없음'
-        description = f"마감일: {deadline}\n요약: {one_line}"
+    for row in rows[:3]:
+        notice_id, title, deadline, one_line, topic, created_at, link_url = row
 
-        link = row['detail_link']
-        raw_path = row['imageUrl']
-   
-        if pd.notna(raw_path) and raw_path:
-            image_url = f"{AZURE_BASE_URL}/images/{os.path.basename(raw_path)}"
+        cursor.execute("""
+            SELECT TOP 1 file_url
+            FROM dbo.notice_attachment
+            WHERE notice_id = ?
+            ORDER BY file_order ASC
+        """, notice_id)
+        img_row = cursor.fetchone()
+        if img_row and img_row[0]:
+            encoded_path = quote(img_row[0])
+            image_url = encoded_path if encoded_path.startswith('http') else DEFAULT_IMAGE
         else:
-            image_url = default_image
+            image_url = DEFAULT_IMAGE
+
+        description = f"마감일: {deadline.strftime('%Y-%m-%d') if deadline else '정보 없음'}\n요약: {one_line or '요약 없음'}"
+
         card = {
             "title": title,
             "description": description,
-            "thumbnail": {"imageUrl": image_url} if image_url else {},
+            "thumbnail": {"imageUrl": image_url},
             "buttons": [
                 {
                     "action": "webLink",
                     "label": "자세히 보기",
-                    "webLinkUrl": link
+                    "webLinkUrl": link_url
                 }
             ]
         }
@@ -168,4 +126,19 @@ def message():
         }
     })
 
+def make_text_response(text):
+    return jsonify({
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "simpleText": {
+                        "text": text
+                    }
+                }
+            ]
+        }
+    })
 
+if __name__ == '__main__':
+    app.run(port=5000)
