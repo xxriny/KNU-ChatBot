@@ -1,4 +1,1 @@
-{
-  "schedule": "0 */5 * * * *",
-  "timezone": "Asia/Seoul"
-}
+{ "schedule": "0 * * * * *", "timezone": "Asia/Seoul" }
