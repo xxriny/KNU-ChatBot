@@ -123,7 +123,7 @@ AND (n.deadline IS NULL OR n.deadline >= ?)
 
         cards = []
         for row in rows[:5]:
-            notice_id, title, deadline, one_line, topic, created_at, link_url, file_url = row
+            notice_id, title, deadline, one_line, topic, created_at, link_url, file_url, dept_notice_id = row
 
             if file_url and str(file_url).startswith("http"):
                 image_url = file_url
