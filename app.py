@@ -9,8 +9,8 @@ load_dotenv()
 
 app = Flask(__name__)
 
-AZURE_BASE_URL = 'https://kchatbot.azurewebsites.net'
-DEFAULT_IMAGE = f"https://knuchatstorage.blob.core.windows.net/images/default.png"
+AZURE_BASE_URL = 'https://knuchat.azurewebsites.net'
+DEFAULT_IMAGE = f"https://kchatsotrage.blob.core.windows.net/images/default.png"
 
 # DB 연결 함수
 def get_db_connection():
