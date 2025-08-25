@@ -4,7 +4,6 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 
-# 환경변수 로드
 load_dotenv()
 
 app = Flask(__name__)
@@ -12,7 +11,6 @@ app = Flask(__name__)
 AZURE_BASE_URL = 'https://knuchat.azurewebsites.net'
 DEFAULT_IMAGE = f"https://kchatsotrage.blob.core.windows.net/images/default.png"
 
-# DB 연결 함수
 def get_db_connection():
     return pyodbc.connect(
         f"DRIVER={{ODBC Driver 18 for SQL Server}};"
